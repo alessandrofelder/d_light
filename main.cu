@@ -2,6 +2,7 @@
 #include <tiffio.h>
 #include <assert.h>
 #include <iostream>
+#include <limits>
 
 #include <cuda.h>
 #include <helper_cuda.h>
@@ -16,12 +17,22 @@ const int blocksize = 512;
 __constant__ double d_lightAverage;
 
 __global__
-void correct(GreyscaleValue* d_image,GreyscaleValue* d_lightData,GreyscaleValue* d_darkData)
+void flatFieldCorrect(GreyscaleValue* d_image,GreyscaleValue* d_lightData,GreyscaleValue* d_darkData)
 {
 	int localIndex = blockIdx.x * blockDim.x + threadIdx.x;
 	double outputVal (((double) (d_image[localIndex] - d_darkData[localIndex]))/ ((double) (d_lightData[localIndex]-d_darkData[localIndex])));
 	outputVal *= d_lightAverage;
 	d_image[localIndex] = (GreyscaleValue) outputVal;
+}
+
+__constant__ int d_typeMax;
+
+__global__
+void invert(GreyscaleValue* d_image)
+{
+	int localIndex = blockIdx.x * blockDim.x + threadIdx.x;
+
+	d_image[localIndex] = d_typeMax - d_image[localIndex];
 }
 
 int main(int argc, const char **argv)
@@ -50,6 +61,7 @@ int main(int argc, const char **argv)
 	TIFF *light = TIFFOpen("/home/alessandro/Documents/ImageData/070915/light-median-gimp.tif","r");
 	TIFF *dark = TIFFOpen("/home/alessandro/Documents/ImageData/070915/dark-median-gimp.tif","r");
 	TIFF *correctedGPU = TIFFOpen("/home/alessandro/Documents/ImageData/070915/sloth/sloth1_00008-correctedGPU.tif", "w");
+	TIFF *invertedGPU = TIFFOpen("/home/alessandro/Documents/ImageData/070915/sloth/sloth1_00008-invertedGPU.tif", "w");
 	toCorrect	=	TIFFOpen("/home/alessandro/Documents/ImageData/070915/sloth/sloth1_00008.tif", "r");
 
 	uint32 width, height;
@@ -68,6 +80,12 @@ int main(int argc, const char **argv)
 	assert(TIFFSetField(correctedGPU, TIFFTAG_PHOTOMETRIC, photo));
 	assert(TIFFSetField(correctedGPU, TIFFTAG_SAMPLEFORMAT, sampleFormat));
 
+	assert(TIFFSetField(invertedGPU, TIFFTAG_IMAGEWIDTH, width));
+	assert(TIFFSetField(invertedGPU, TIFFTAG_IMAGELENGTH, height));
+	assert(TIFFSetField(invertedGPU, TIFFTAG_BITSPERSAMPLE, bps));
+	assert(TIFFSetField(invertedGPU, TIFFTAG_SAMPLESPERPIXEL, spp));
+	assert(TIFFSetField(invertedGPU, TIFFTAG_PHOTOMETRIC, photo));
+	assert(TIFFSetField(invertedGPU, TIFFTAG_SAMPLEFORMAT, sampleFormat));
 
 	int npixels = width*height;
 
@@ -76,7 +94,8 @@ int main(int argc, const char **argv)
 	GreyscaleValue * h_inputData  = (GreyscaleValue *) _TIFFmalloc(linesize * width);
 	GreyscaleValue * h_lightData  = (GreyscaleValue *) _TIFFmalloc(linesize * width);
 	GreyscaleValue * h_darkData   = (GreyscaleValue *) _TIFFmalloc(linesize * width);
-	GreyscaleValue * h_outputData = (GreyscaleValue *) _TIFFmalloc(linesize * width);
+	GreyscaleValue * h_correctedData = (GreyscaleValue *) _TIFFmalloc(linesize * width);
+	GreyscaleValue * h_invertedData = (GreyscaleValue *) _TIFFmalloc(linesize * width);
 
 	double h_lightAverage = 0.0;
 
@@ -107,12 +126,21 @@ int main(int argc, const char **argv)
 	checkCudaErrors(cudaMemcpy( d_darkData,  h_darkData,  dataSize, cudaMemcpyHostToDevice ));
 	checkCudaErrors(cudaMemcpyToSymbol(d_lightAverage, &h_lightAverage, sizeof(double)));
 
+	int h_typeMax = std::numeric_limits<GreyscaleValue>::max();
+	checkCudaErrors(cudaMemcpyToSymbol(d_typeMax, &h_typeMax, sizeof(int)));
+
 	dim3 dimBlock( blocksize, 1);
 	dim3 dimGrid( gridsize, 1 );
-	correct<<<dimGrid, dimBlock>>>(d_data,d_lightData,d_darkData);
+	flatFieldCorrect<<<dimGrid, dimBlock>>>(d_data,d_lightData,d_darkData);
+	checkCudaErrors(cudaMemcpy(h_correctedData, d_data, dataSize, cudaMemcpyDeviceToHost));
 
-	checkCudaErrors(cudaMemcpy(h_outputData, d_data, dataSize, cudaMemcpyDeviceToHost));
+	checkCudaErrors(cudaMemcpy( d_data, h_inputData, dataSize, cudaMemcpyHostToDevice));
+	invert<<<dimGrid, dimBlock>>>(d_data);
+	checkCudaErrors(cudaMemcpy(h_invertedData, d_data, dataSize, cudaMemcpyDeviceToHost));
+
 	checkCudaErrors(cudaFree(d_data));
+	checkCudaErrors(cudaFree(d_lightData));
+	checkCudaErrors(cudaFree(d_darkData));
 
 
 	cudaEventRecord(stop);
@@ -122,7 +150,9 @@ int main(int argc, const char **argv)
 
 	for(int row=0; row<height; row++)
 	{
-		assert(TIFFWriteScanline(correctedGPU, &h_outputData[row*linesize], row));
+		assert(TIFFWriteScanline(correctedGPU, &h_correctedData[row*linesize], row));
+		assert(TIFFWriteScanline(invertedGPU, &h_invertedData[row*linesize], row));
+
 	}
 
 	cudaDeviceReset();
@@ -130,13 +160,16 @@ int main(int argc, const char **argv)
 	_TIFFfree(h_inputData);
 	_TIFFfree(h_lightData);
 	_TIFFfree(h_darkData);
-	_TIFFfree(h_outputData);
+	_TIFFfree(h_correctedData);
+	_TIFFfree(h_invertedData);
+
 
 
 	TIFFClose(light);
 	TIFFClose(dark);
 	TIFFClose(toCorrect);
 	TIFFClose(correctedGPU);
+	TIFFClose(invertedGPU);
 
     return 0;
 
