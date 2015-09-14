@@ -9,31 +9,14 @@
 
 typedef unsigned char GreyscaleValue; //unsigned char for 8-bit and unsigned short for 16-bit tiff
 
-#include "flatFieldCorrect_cpu.hh"
+#include "flatFieldCorrect_cpu.h"
+#include "flatFieldCorrect_kernel.h"
+
+#include "invert_kernel.h"
 
 const int gridsize = 2048;
 const int blocksize = 512;
 
-__constant__ double d_lightAverage;
-
-__global__
-void flatFieldCorrect(GreyscaleValue* d_image,GreyscaleValue* d_lightData,GreyscaleValue* d_darkData)
-{
-	int localIndex = blockIdx.x * blockDim.x + threadIdx.x;
-	double outputVal (((double) (d_image[localIndex] - d_darkData[localIndex]))/ ((double) (d_lightData[localIndex]-d_darkData[localIndex])));
-	outputVal *= d_lightAverage;
-	d_image[localIndex] = (GreyscaleValue) outputVal;
-}
-
-__constant__ int d_typeMax;
-
-__global__
-void invert(GreyscaleValue* d_image)
-{
-	int localIndex = blockIdx.x * blockDim.x + threadIdx.x;
-
-	d_image[localIndex] = d_typeMax - d_image[localIndex];
-}
 
 int main(int argc, const char **argv)
 {
