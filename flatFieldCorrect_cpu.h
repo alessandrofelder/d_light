@@ -1,10 +1,10 @@
-void flatFieldCorrect_cpu(tiff* input, tiff* output) {
-	TIFF *light = TIFFOpen(
-			"/home/alessandro/Documents/ImageData/070915/light-median-gimp.tif",
-			"r");
-	TIFF *dark = TIFFOpen(
-			"/home/alessandro/Documents/ImageData/070915/dark-median-gimp.tif",
-			"r");
+void flatFieldCorrect_cpu() {
+
+	TIFF *light 		= TIFFOpen("/home/alessandro/Documents/ImageData/100915/MED_light.tif","r");
+	TIFF *dark 			= TIFFOpen("/home/alessandro/Documents/ImageData/100915/MED_dark.tif","r");
+	TIFF *output 		= TIFFOpen("/home/alessandro/Documents/ImageData/100915/lamb/corrected/lamb0_00001-correctedCPU.tif", "w");
+	TIFF *input			= TIFFOpen("/home/alessandro/Documents/ImageData/100915/lamb/lamb0_00001.tif", "r");
+
 
 	uint32 width, height;
 	uint16  spp, bps, photo, sampleFormat;
@@ -25,10 +25,8 @@ void flatFieldCorrect_cpu(tiff* input, tiff* output) {
 	int linesize = TIFFScanlineSize(input);
 
 	GreyscaleValue * h_inputData = (GreyscaleValue *) _TIFFmalloc(linesize);
-	GreyscaleValue * h_lightData = (GreyscaleValue *) _TIFFmalloc(
-			linesize * width);
-	GreyscaleValue * h_darkData = (GreyscaleValue *) _TIFFmalloc(
-			linesize * width);
+	GreyscaleValue * h_lightData = (GreyscaleValue *) _TIFFmalloc(linesize * width);
+	GreyscaleValue * h_darkData = (GreyscaleValue *) _TIFFmalloc(linesize * width);
 	GreyscaleValue * h_outputData = (GreyscaleValue *) _TIFFmalloc(linesize);
 
 	double h_lightAverage = 0.0;
