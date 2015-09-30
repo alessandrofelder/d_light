@@ -1,68 +1,85 @@
-void flatFieldCorrect_cpu() {
-
-	TIFF *light 		= TIFFOpen("/home/alessandro/Documents/ImageData/100915/MED_light.tif","r");
-	TIFF *dark 			= TIFFOpen("/home/alessandro/Documents/ImageData/100915/MED_dark.tif","r");
-	TIFF *output 		= TIFFOpen("/home/alessandro/Documents/ImageData/100915/lamb/corrected/lamb0_00001-correctedCPU.tif", "w");
-	TIFF *input			= TIFFOpen("/home/alessandro/Documents/ImageData/100915/lamb/lamb0_00001.tif", "r");
+#include "fieldImages.h"
 
 
-	uint32 width, height;
-	uint16  spp, bps, photo, sampleFormat;
-	TIFFGetField(input, TIFFTAG_IMAGEWIDTH, &width);
-	TIFFGetField(input, TIFFTAG_IMAGELENGTH, &height);
-	TIFFGetField(input, TIFFTAG_BITSPERSAMPLE, &bps);
-	TIFFGetField(input, TIFFTAG_SAMPLESPERPIXEL, &spp);
-	TIFFGetField(input, TIFFTAG_PHOTOMETRIC, &photo);
-	TIFFGetField(input, TIFFTAG_SAMPLEFORMAT, &sampleFormat);
+template<typename GreyscaleValue, typename Real> void flatFieldCorrect_cpu(
+		FieldImages& fi, const char* fileToCorrectPrefix, const int nImages) {
 
-	TIFFSetField(output, TIFFTAG_IMAGEWIDTH, width);
-	TIFFSetField(output, TIFFTAG_IMAGELENGTH, height);
-	TIFFSetField(output, TIFFTAG_BITSPERSAMPLE, bps);
-	TIFFSetField(output, TIFFTAG_SAMPLESPERPIXEL, spp);
-	TIFFSetField(output, TIFFTAG_PHOTOMETRIC, photo);
-	TIFFSetField(output, TIFFTAG_SAMPLEFORMAT, sampleFormat);
+	char file[200];
 
-	int linesize = TIFFScanlineSize(input);
+	for (int image = 1; image < nImages + 1; image++) {
 
-	GreyscaleValue * h_inputData = (GreyscaleValue *) _TIFFmalloc(linesize);
-	GreyscaleValue * h_lightData = (GreyscaleValue *) _TIFFmalloc(linesize * width);
-	GreyscaleValue * h_darkData = (GreyscaleValue *) _TIFFmalloc(linesize * width);
-	GreyscaleValue * h_outputData = (GreyscaleValue *) _TIFFmalloc(linesize);
+		snprintf(file, sizeof(file), "%s%05d%s", fileToCorrectPrefix, image,
+				".tif");
+		TIFF *input = TIFFOpen(file, "r");
 
-	double h_lightAverage = 0.0;
+		snprintf(file, sizeof(file), "%s%05d%s", fileToCorrectPrefix, image,
+				"_correctedCPU.tif");
+		TIFF *output = TIFFOpen(file, "w");
 
-	for (int row = 0; row < height; row++) {
-		TIFFReadScanline(light, &h_lightData[row * linesize], row);
-		for (int column = 0; column < width; column++) {
-			h_lightAverage += (double) h_lightData[row * linesize+column];
+		uint32 width, height;
+		uint16 spp, bps, photo, sampleFormat;
+		TIFFGetField(input, TIFFTAG_IMAGEWIDTH, &width);
+		TIFFGetField(input, TIFFTAG_IMAGELENGTH, &height);
+		TIFFGetField(input, TIFFTAG_BITSPERSAMPLE, &bps);
+		TIFFGetField(input, TIFFTAG_SAMPLESPERPIXEL, &spp);
+		TIFFGetField(input, TIFFTAG_PHOTOMETRIC, &photo);
+		TIFFGetField(input, TIFFTAG_SAMPLEFORMAT, &sampleFormat);
+
+		TIFFSetField(output, TIFFTAG_IMAGEWIDTH, width);
+		TIFFSetField(output, TIFFTAG_IMAGELENGTH, height);
+		TIFFSetField(output, TIFFTAG_BITSPERSAMPLE, bps);
+		TIFFSetField(output, TIFFTAG_SAMPLESPERPIXEL, spp);
+		TIFFSetField(output, TIFFTAG_PHOTOMETRIC, photo);
+		TIFFSetField(output, TIFFTAG_SAMPLEFORMAT, sampleFormat);
+
+		assert(bps == 8 * sizeof(GreyscaleValue));
+
+		uint16 linesize = TIFFScanlineSize(input);
+
+		GreyscaleValue * h_inputData = (GreyscaleValue *) _TIFFmalloc(
+				linesize * sizeof(GreyscaleValue));
+		GreyscaleValue * h_darkData = (GreyscaleValue *) _TIFFmalloc(
+				linesize * height * sizeof(GreyscaleValue));
+		GreyscaleValue * h_lightData = (GreyscaleValue *) _TIFFmalloc(
+				linesize * height * sizeof(GreyscaleValue));
+		GreyscaleValue * h_outputData = (GreyscaleValue *) _TIFFmalloc(
+				linesize * sizeof(GreyscaleValue));
+
+		Real h_flatAverage = 0.0;
+
+		for (int row = 0; row < height; row++) {
+			TIFFReadScanline(fi.dark, &h_darkData[row * linesize], row);
 		}
-	}
 
-	for (int row = 0; row < height; row++) {
-		TIFFReadScanline(dark, &h_darkData[row * linesize], row);
-	}
-
-	h_lightAverage /= (width * height);
-
-	for (int row = 0; row < height; row++) {
-		TIFFReadScanline(input, h_inputData, row);
-		for (int column = 0; column < width; column++) {
-			double outputVal = (((double) (h_inputData[column]
-					- h_darkData[row * linesize + column]))
-					/ ((double) (h_lightData[row * linesize + column]
-							- h_darkData[row * linesize + column])));
-			outputVal *= h_lightAverage;
-			h_outputData[column] = (GreyscaleValue) outputVal;
+		for (int row = 0; row < height; row++) {
+			TIFFReadScanline(fi.light, &h_lightData[row * linesize], row);
+			for (int column = 0; column < width; column++) {
+				h_flatAverage += (Real) h_lightData[row * linesize + column]
+						- (Real) h_darkData[row * linesize + column];
+			}
 		}
-		TIFFWriteScanline(output, h_outputData, row);
-	}
-	_TIFFfree(h_inputData);
-	_TIFFfree(h_lightData);
-	_TIFFfree(h_darkData);
-	_TIFFfree(h_outputData);
 
-	TIFFClose(light);
-	TIFFClose(dark);
-	TIFFClose(input);
-	TIFFClose(output);
+		h_flatAverage /= (width * height);
+
+		for (int row = 0; row < height; row++) {
+			TIFFReadScanline(input, h_inputData, row);
+			for (int column = 0; column < width; column++) {
+				Real outputVal = (((Real) (h_inputData[column]
+						- h_darkData[row * linesize + column]))
+						/ ((Real) (h_lightData[row * linesize + column]
+								- h_darkData[row * linesize + column])));
+				outputVal *= h_flatAverage;
+				h_outputData[column] = (GreyscaleValue) outputVal;
+			}
+			TIFFWriteScanline(output, h_outputData, row);
+		}
+
+		_TIFFfree(h_inputData);
+		_TIFFfree(h_lightData);
+		_TIFFfree(h_darkData);
+		_TIFFfree(h_outputData);
+
+		TIFFClose(input);
+		TIFFClose(output);
+	}
 }
